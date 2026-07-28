@@ -23,13 +23,15 @@ For local development, point the marketplace at a working copy instead:
 ```
 
 The registry starts **empty** — nothing is seeded and nothing already in your skills directory is
-adopted. Existing skills simply show up as drift until you register the ones you want.
+adopted. Existing skills simply show up as unregistered until you register the ones you want, and
+`/skill-manager:discover` tells you which of them *can* be.
 
 ## Use
 
 ```
 /skill-manager:add <repo-url>     register a repo and install it now
 /skill-manager:list               what's registered
+/skill-manager:discover           find already-installed skills worth tracking
 /skill-manager:status             per-skill SHA + last update, auto-update state, next check
 /skill-manager:sync               update everything now
 /skill-manager:remove <name>      stop tracking one
@@ -45,6 +47,29 @@ Start with `add`:
 `claude-code-spec` but the skill's `name:` is `spec`, the folder has to be `spec`.
 
 New skills load at session start, so `/reload-skills` or a restart after adding one.
+
+## Adopting skills you already have
+
+If you were installing skills by hand before, `discover` tells you which of them can be tracked:
+
+```
+$ /skill-manager:discover
+[candidate] reconcile-docs  git@github.com:you/claude-code-reconcile-docs.git  (--dir reconcile-docs)
+[skip] nes-rom-builder: not a git checkout -- nothing to track
+[skip] scratch-dir: not a git checkout -- nothing to track, and no SKILL.md
+[info] 1 candidate; add with:
+[info]   add git@github.com:you/claude-code-reconcile-docs.git --dir reconcile-docs
+```
+
+Read-only and offline — it reads each folder's `origin` and branch from disk and writes nothing, so
+you choose what to adopt. Mostly a one-time command after installing.
+
+It works out the flags for you, which matters most for `--dir`: without it an `add` would install a
+*second* copy under the repo's name instead of adopting the folder already there. It also suggests
+`--ref` when a checkout sits on a branch other than `main`.
+
+What it can't see: a **monorepo-subdir skill** has no `.git`, so it's indistinguishable from a
+local-only folder and shows as `not a git checkout` — those need `--subdir` by hand.
 
 ## Automatic updates
 

@@ -45,3 +45,11 @@ Each entry is numbered with a monotonically increasing integer. Append new entri
    compaction stays fully silent because it can fire repeatedly inside one task.
    The report marker is stamped only when a line was actually shown, so a quiet `clear` cannot
    swallow updates a later startup should announce.
+
+7. New read-only `discover` command: reports unregistered folders in the skills dir that could be
+   tracked, with the exact `add` flags each needs.
+   It computes `--dir` when the repo name differs from the folder — without it an add would install a
+   second copy instead of adopting what is there — and `--ref` for a non-`main` branch.
+   Deliberately reports rather than adopts, matching the standing non-goal, and stays offline: origin
+   URL, branch and folder name are all local. A `copy`-mode skill has no `.git`, so it cannot be
+   distinguished from a local-only folder and needs `--subdir` by hand.

@@ -9,6 +9,7 @@ which alternatives were retained.
 .claude-plugin/plugin.json       plugin manifest (name = command namespace)
 .claude-plugin/marketplace.json  single-plugin marketplace, "source": "./"
 commands/*.md                    one per verb -> /skill-manager:<verb>
+                                 (sync, list, status, discover, add, remove)
 hooks/hooks.json                 one SessionStart entry (line + detached update)
 scripts/paths.js                 XDG config/state resolution
 scripts/registry.js              pure helpers + registry read/validate/write

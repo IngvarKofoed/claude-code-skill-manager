@@ -23,6 +23,7 @@ carry the flag guidance and the safety rules:
 |---|---|
 | update / sync / install my skills | `/skill-manager:sync` |
 | what's registered? | `/skill-manager:list` |
+| which existing folders could I track? | `/skill-manager:discover` |
 | what's installed, is auto-update working, what's drifting? | `/skill-manager:status` |
 | track a new repo | `/skill-manager:add <repo-url>` |
 | stop tracking one | `/skill-manager:remove <name>` |
@@ -30,7 +31,7 @@ carry the flag guidance and the safety rules:
 Underneath, every command runs the same engine:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/sync.js" <sync|list|status|add|remove> [flags]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/sync.js" <sync|list|status|discover|add|remove> [flags]
 ```
 
 ## Reading the output

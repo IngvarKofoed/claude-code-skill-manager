@@ -21,8 +21,10 @@
 //     and the subdir is copied (.git-excluded) into <skills-dir>/<dir>.
 //
 // Invocation:
-//     node sync.js sync            (manual, any platform)
-//     node sync.js auto            (the SessionEnd hook; always exits 0)
+//     node sync.js sync             (manual, any platform)
+//     node sync.js session-status    (the SessionStart hook: prints one line,
+//                                     then spawns `auto` detached; always 0)
+//     node sync.js auto             (the background update pass; always 0)
 
 const fs = require('fs');
 const path = require('path');
@@ -780,6 +782,64 @@ function cmdStatus(entries, ctx) {
   return EXIT_OK;
 }
 
+/**
+ * Inspect unregistered folders and report which could be tracked.
+ *
+ * Read-only by design: nothing is adopted on the user's behalf (a stated
+ * non-goal), so this ends in paste-ready `add` commands rather than writing to
+ * the registry. Purely local too -- the origin URL, the branch and the folder
+ * name are all on disk, so it needs no network and no auth.
+ *
+ * Mostly a one-time command, run after installing to catch up with skills that
+ * were already in place.
+ */
+function cmdDiscover(entries, ctx) {
+  const regDirs = new Set(entries.map((e) => e.dir));
+  const names = driftNames(ctx.skillsDir, regDirs);
+  if (!names.length) {
+    log('info', 'nothing unregistered -- every folder in the skills dir is tracked');
+    return EXIT_OK;
+  }
+
+  const candidates = [];
+  for (const name of names) {
+    const p = path.join(ctx.skillsDir, name);
+    // A folder with no SKILL.md is probably not a skill at all (scratch output,
+    // a workspace dir), so flag it rather than silently proposing it.
+    const noSkillMd = !fs.existsSync(path.join(p, 'SKILL.md'));
+    if (!isGitRepo(p, ctx)) {
+      log('skip', `${name}: not a git checkout -- nothing to track${noSkillMd ? ', and no SKILL.md' : ''}`);
+      continue;
+    }
+    const url = remoteUrl(p, ctx);
+    if (!url) {
+      log('skip', `${name}: git repo with no 'origin' -- push it somewhere first`);
+      continue;
+    }
+    const flags = [];
+    // Claude Code discovers skills by FOLDER name, so a repo whose name differs
+    // must pin --dir or the add would install alongside instead of adopting.
+    if (R.repoNameFromUrl(url) !== name) flags.push(`--dir ${name}`);
+    const br = currentBranch(p, ctx);
+    if (br && br !== R.DEFAULT_REF) flags.push(`--ref ${br}`);
+    candidates.push({ name, url, flags });
+    log(
+      'candidate',
+      `${name}  ${url}${flags.length ? '  (' + flags.join(' ') + ')' : ''}${noSkillMd ? '  [no SKILL.md]' : ''}`
+    );
+  }
+
+  if (!candidates.length) {
+    log('info', 'no candidates -- none of the unregistered folders is a git checkout with a remote');
+    return EXIT_OK;
+  }
+  log('info', `${candidates.length} candidate${candidates.length === 1 ? '' : 's'}; add with:`);
+  for (const c of candidates) {
+    log('info', `  add ${c.url}${c.flags.length ? ' ' + c.flags.join(' ') : ''}`);
+  }
+  return EXIT_OK;
+}
+
 /** Add an entry to the registry, then install just that one. */
 function cmdAdd(ctx) {
   const repo = ctx.positionals[0];
@@ -1236,7 +1296,7 @@ function appendLog(lines) {
 
 // ============ CLI =========================================================
 
-const COMMANDS = new Set(['sync', 'list', 'status', 'add', 'remove', 'auto', 'session-status']);
+const COMMANDS = new Set(['sync', 'list', 'status', 'discover', 'add', 'remove', 'auto', 'session-status']);
 
 const USAGE = `skill-manager sync engine
 
@@ -1246,6 +1306,7 @@ Commands:
   sync                 clone missing entries + update all to their pinned ref
   list                 print each entry: dir, repo, ref, subdir, installed?
   status               summary, auto-update state, unregistered-folder count
+  discover             report unregistered folders that could be tracked
   add <repo-url>       add an entry to the registry, then install it
   remove <name>        drop an entry from the registry
   auto                 throttled SessionEnd hook entry point (always exits 0)
@@ -1448,6 +1509,9 @@ function main(argv) {
         break;
       case 'status':
         rc = cmdStatus(entries, ctx);
+        break;
+      case 'discover':
+        rc = cmdDiscover(entries, ctx);
         break;
       case 'add':
         rc = cmdAdd(ctx);
