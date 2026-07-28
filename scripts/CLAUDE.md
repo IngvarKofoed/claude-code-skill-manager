@@ -20,8 +20,10 @@ The git-touching paths have **no unit coverage** and are verified by running `sy
 
 These are the rules the design rests on. Each one exists because violating it produces a bad failure, not a slightly worse one.
 
-- **Both hook entry points — `auto` and `session-status` — exit 0 on every path**, including unhandled exceptions. A nonzero exit is user-visible noise from a tool whose whole job is to be unobtrusive.
-- **`session-status` never touches the network or git.** It runs at session start, the one moment the user is actively waiting, and it deliberately runs *before* `requireGit()` so a missing git cannot turn a status line into an error. Adding a fetch here would also be pointless: discovery precedes hooks, so nothing fetched could apply to this session.
+- **`session-status` and `auto` exit 0 on every path**, including unhandled exceptions. `session-status` is the hook; a nonzero exit there is user-visible noise from a tool whose whole job is to be unobtrusive.
+- **`session-status` itself never touches the network or git.** It runs at session start, the one moment the user is actively waiting. It deliberately runs *before* `requireGit()`, so a missing git cannot turn a status line into an error, and it hands all real work to a detached child.
+- **`auto` must stay detached, never inline in a hook.** It ran inline in a `SessionEnd` hook once: teardown killed it 1–2s in, before the probes finished, leaving no log, no stamp, and a leaked lock — a total, silent failure. If you ever move it back into a hook's foreground, you are re-introducing that.
+- **The lock reclaims on a dead owner, not just on age.** A killed pass never runs its `finally`, so the lock outlives it; an age-only rule then blocks every retry for the whole window. Keep the pid check first.
 - **`auto` writes the throttle stamp unconditionally**, including on failure and on deadline exhaustion. Otherwise a dead network or an expired credential retries on *every* session instead of once per interval.
 - **`--force` must stay unreachable from `auto`.** Unattended code may never discard the user's work. The dirty-tree and diverged-branch skips are the point of the tool, not an inconvenience.
 - **The deadline is what makes the synchronous design safe.** Never let the `auto` path use the plain `GIT_TIMEOUT`; every git op takes `min(remaining budget, per-op cap)`. Without it a stalled network holds a session open on quit.

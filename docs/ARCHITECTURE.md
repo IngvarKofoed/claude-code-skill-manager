@@ -9,7 +9,7 @@ which alternatives were retained.
 .claude-plugin/plugin.json       plugin manifest (name = command namespace)
 .claude-plugin/marketplace.json  single-plugin marketplace, "source": "./"
 commands/*.md                    one per verb -> /skill-manager:<verb>
-hooks/hooks.json                 SessionStart (status line) + SessionEnd (update)
+hooks/hooks.json                 one SessionStart entry (line + detached update)
 scripts/paths.js                 XDG config/state resolution
 scripts/registry.js              pure helpers + registry read/validate/write
 scripts/sync.js                  git plumbing, install modes, commands, CLI
@@ -38,7 +38,15 @@ Resolved by `scripts/paths.js`, mirroring the convention used by `claude-code-no
 | stamp / lock / log | `$XDG_STATE_HOME/claude-code-skill-manager/` → `~/.local/state/…` | `%LOCALAPPDATA%\claude-code-skill-manager\` |
 | skills dir | `$CLAUDE_SKILLS_DIR`, else `~/.claude/skills` | same |
 
-State files: `last-check` (mtime is the throttle stamp), `skill-manager.lock`, `skill-manager.log`.
+State files: `last-check` (mtime is the throttle stamp), `last-report` (mtime is the cutoff for
+what has already been announced), `skill-manager.lock` (holds the owning pid),
+`skill-manager.log`, `updates.json`.
+
+`updates.json` holds `{ dir: { sha, at } }` — the last update the engine *applied* per skill. It has
+to be written as it happens: git can say what a checkout is at, but not when this tool last moved it.
+Records are pruned to the current registry on every write, so removing a skill cleans up after
+itself. It is derived state — deleting it costs a dash in `status`, nothing more, which is why every
+write is best-effort and a failure never turns a successful update into a reported one.
 
 Override order — registry: `--registry` → config path. Skills dir: `--skills-dir` →
 `$CLAUDE_SKILLS_DIR` → default.
@@ -108,6 +116,33 @@ not really have. Fixing it properly would mean comparing subdir tree SHAs, which
 objects, which requires a fetch — defeating the point of a cheap probe. Repo-granularity plus a
 harmless re-copy is the better trade.
 
+## What `status` reports
+
+```
+[info] 4 registered, 4 installed
+[info] auto-update: on (mode=apply, every 6h)
+[info] last auto check: 34m ago (next due in 5.4h)
+[skill] scaffold            f80a65c        updated 3d ago
+[skill] foss-design-system  0802c49        no update recorded
+[info] 9 unregistered folders (--drift to list)
+```
+
+The per-skill SHA is read **live** from the entry's checkout, not from `updates.json` — so it stays
+truthful even when a skill was moved outside this tool by a hand pull or a local commit. For a
+`copy`-mode entry it comes from the cache, since the target has no `.git`. The timestamp is the
+opposite: it can only come from the record.
+
+`no update recorded` is the honest answer for a skill adopted at its current tip and never moved
+since — not an error, and the expected state right after registering existing folders.
+
+`updated 3d ago (moved since)` means the live SHA and the recorded one disagree: something moved that
+checkout outside this tool — a hand pull, a reset, a local commit. Without the marker the timestamp
+would imply the current state came from that update, which is exactly the kind of quiet lie the
+live-SHA choice exists to avoid.
+
+Drift is summarized to a count; `--drift` lists it. With a small registry the per-folder lines
+outnumbered everything else and buried the counts and check times that are the point of the command.
+
 ## The two destructive paths
 
 Only two operations can lose work, and both are reachable solely from an explicit manual flag —
@@ -128,39 +163,55 @@ offline, dead remote, revoked key — or the log cannot be read, the answer is "
 is refused. A repo with no remote at all also answers "unpushed", since nothing in it is pushed
 anywhere. **Fail safe, never fail open.** `--force` overrides all of it.
 
-## The `auto` path (the SessionEnd hook)
+## The `auto` path (a detached background pass)
 
-```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/sync.js" auto      timeout: 30
+`auto` is not wired to a hook. It is spawned as a **detached child** by the `SessionStart` hook,
+which returns without waiting for it:
+
+```js
+spawn(process.execPath, [__filename, 'auto'], { detached: true, stdio: 'ignore' }).unref()
 ```
 
-No matcher, so it fires on every `SessionEnd` reason (`clear`, `logout`, `prompt_input_exit`,
-`other`). Frequent firing is harmless because the work is throttled — extra firings cost one `stat`.
+**Why detached rather than inside a hook.** `auto` originally ran inline in a `SessionEnd` hook. That
+failed in practice: teardown killed it one to two seconds in, before four `ls-remote` probes
+finished — no log line, no stamp, and a leaked lock, all silently. A hook running while its session
+is dismantled has no reliable time budget. Detached from session *start*, the pass inherits the
+session's lifetime; startup pays only the spawn (~26 ms measured).
 
 1. Registry missing / unreadable / `autoUpdate: false` / no entries → exit 0, silent. No lock, no
-   stamp, no log. This is the fresh-install path.
+   stamp, no log. This is the fresh-install path. (The parent also checks, to avoid spawning at all.)
 2. Stamp younger than `checkIntervalHours` → exit 0, silent. **The common path; it stays one stat.**
-3. Acquire `skill-manager.lock` (`open` with `wx`, atomic). Held → exit 0. A lock older than 10
-   minutes is treated as a crash leftover and reclaimed once.
+3. Acquire `skill-manager.lock` (`open` with `wx`, atomic). Held → exit 0.
 4. Start the deadline. Per entry, while budget remains: probe; if behind, fetch and apply. Every git
-   op is capped at `min(remaining, 10s)`. Exhausted → stop and log what was skipped.
+   op is capped at `min(remaining, 60s)`. Exhausted → stop and log what was skipped.
 5. Write the stamp **unconditionally**, including on failure — so a dead network or an expired
    credential degrades to one retry per interval, not one per session.
-6. Emit a `systemMessage` only if something changed or was skipped.
+6. Record each applied update in `updates.json`; the next session start announces it.
 7. **Exit 0 on every path**, including an unhandled exception.
 
-`AUTO_DEADLINE_MS` is 20s against a hook `timeout` of 30s, so the engine's own limit fires first and
-stops cleanly rather than being killed mid-operation.
+`AUTO_DEADLINE_MS` is 5 minutes and the per-op cap 60s — a runaway guard, not a latency budget, since
+nothing waits on the pass. Both were an order of magnitude tighter when this ran inline, which is
+precisely why it never completed.
 
 `--force` is unreachable from `auto`. `GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=never` mean a
-passphrase-locked key fails to the log instead of holding the session open.
+passphrase-locked key fails to the log instead of hanging a background process forever.
+
+### The lock, and why a dead owner beats an age threshold
+
+The lock file holds the owning pid. `acquireLock` reclaims it when **the owner is dead**, falling
+back to a 10-minute age threshold only when the pid is unreadable or may have been recycled.
+
+Age alone was not enough, and this was observed rather than theorised: a killed pass leaves the lock
+behind (its `finally` never runs), and waiting out the window blocks every subsequent attempt for its
+duration. If something kills the pass consistently, an age-only rule means nothing ever updates —
+and says nothing about it.
 
 ### Output channels
 
 `systemMessage` is used, never `additionalContext` — the latter is injected into the model's context,
-a per-session token cost for a message the model has no use for. Since a `SessionEnd` message may not
-be surfaced at all, **the log file is the real channel** and `/skill-manager:status` is where history
-is read.
+a per-session token cost for a message the model has no use for. A detached pass has no session to
+speak to at all, so **the log file is the real channel**: findings go there, and the *next* session
+start reports what changed (see below). `/skill-manager:status` is where history is read.
 
 During `auto` all logging is redirected into a sink and flushed to the log file, so stdout carries
 only the `systemMessage` JSON, if any.
@@ -171,12 +222,39 @@ only the `systemMessage` JSON, if any.
 node "${CLAUDE_PLUGIN_ROOT}/scripts/sync.js" session-status      timeout: 10
 ```
 
-A one-line summary of what is tracked and when the next check is due — the counterpart to `auto`,
-and the only place the plugin volunteers information rather than waiting to be asked:
+The only hook. It does two things and returns:
+
+1. **Prints one line** — what is tracked, what changed since last time, when the next check is due.
+2. **Spawns the detached `auto` pass** if the throttle is due.
 
 ```
-[skill-manager] 4 skills · checked 15m ago · next in 5.8h
+[skill-manager] 4 skills · git updated · checked 2m ago · next in 5.9h
 ```
+
+`git updated` is the load-bearing part. Updates land for a *later* session by construction, so this
+is the only place the user finds out one happened. Each is announced **exactly once**: anything in
+`updates.json` newer than the `last-report` marker is news, and the marker is stamped as the line is
+printed. Three names at most, then `+N`.
+
+The two halves are gated differently, on purpose.
+
+The **spawn** fires for every source: a clear or a compaction is a free extra chance to catch up, and
+the throttle makes it cost one `stat`.
+
+The **line** has three behaviours by source:
+
+| source | line |
+|---|---|
+| `startup`, `resume` (and an absent source, i.e. run by hand) | full — counts, news, timings |
+| `clear` | **news only** — `[skill-manager] b updated`, and nothing at all when there is none |
+| `compact` | nothing |
+
+`clear` gets the terse form because the user is mid-work and already knows their own state; counts and
+timings would be pure noise, but an update they haven't heard about is still worth one line. `compact`
+gets nothing because it can fire repeatedly inside a single long task.
+
+The report marker is stamped **only when a line was actually shown**. Otherwise a `clear` with no news
+would consume updates that a later `startup` should have announced.
 
 **Strictly local.** Two reads: the registry, and a `stat` of the stamp. It never shells out to git —
 which is why it runs *before* `requireGit()`, so a missing git cannot turn a status line into an
@@ -193,7 +271,9 @@ keeps `clear` and `compact` quiet, since those happen mid-work where an unsolici
 The stdin read is guarded on `isTTY` so running the subcommand by hand doesn't block. An absent or
 unparseable `source` is allowed through, which keeps it testable from a terminal.
 
-Like `auto`: `systemMessage` only, never `additionalContext`, and **exit 0 on every path**.
+`systemMessage` only, never `additionalContext`, and **exit 0 on every path** -- including when the
+spawn fails. A background pass that never starts is a missed update; a session start that errors is a
+user-visible fault, and the second is worse.
 
 ## Windows-specific handling
 

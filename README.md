@@ -1,7 +1,7 @@
 # skill-manager
 
 A Claude Code **plugin** that keeps a set of GitHub repos installed as skills — as **editable git
-clones you can push from** — and refreshes them automatically when a session ends.
+clones you can push from** — and refreshes them automatically in the background.
 
 You list the repos you want in one registry file. The plugin clones what's missing, updates what's
 behind, and never touches a folder where you have uncommitted work.
@@ -30,7 +30,7 @@ adopted. Existing skills simply show up as drift until you register the ones you
 ```
 /skill-manager:add <repo-url>     register a repo and install it now
 /skill-manager:list               what's registered
-/skill-manager:status             what's installed, auto-update state, drift
+/skill-manager:status             per-skill SHA + last update, auto-update state, next check
 /skill-manager:sync               update everything now
 /skill-manager:remove <name>      stop tracking one
 ```
@@ -48,33 +48,69 @@ New skills load at session start, so `/reload-skills` or a restart after adding 
 
 ## Automatic updates
 
-A `SessionEnd` hook runs the engine in a throttled mode: at most once every `checkIntervalHours`
-(default 6), bounded by a hard 20-second deadline so a stalled network can't hold a session open
-when you quit. It probes with `git ls-remote` — one round-trip per entry, none at all for a
-SHA-pinned one — and only fetches what's actually behind. It's silent when nothing changed, and it
-never passes `--force`.
+At session start the plugin launches a **detached background pass** and immediately gets out of the
+way — startup pays only the spawn (~26 ms). The pass is throttled to once every `checkIntervalHours`
+(default 6). It probes with `git ls-remote` — one round-trip per entry, none at all for a SHA-pinned
+one — fetches only what's actually behind, never passes `--force`, and skips any folder where you
+have uncommitted or diverged work.
 
 **Updates go live from your next session.** Claude Code discovers skills *before* hooks run — this
-was measured, not assumed — so no hook can refresh the session it fires in. Session end is simply
-the cheapest moment to do the work: nothing is waiting on it, and the tree is settled before the
-next session starts.
+was measured, not assumed — so no hook can refresh the session it fires in. That's also why the
+session-start line tells you what changed: it's the first moment you can actually use it.
 
-`SessionEnd` is best-effort. A killed terminal or a sleeping laptop skips it, so
-`/skill-manager:status` shows how long ago the last check ran and `/skill-manager:sync` is the
+It runs detached rather than inside a `SessionEnd` hook because that was tried and doesn't work:
+session teardown killed the hook a second or two in, before the probes could finish, leaving nothing
+updated and nothing said about it. A detached child gets the whole session to work in.
+
+`/skill-manager:status` shows how long ago the last check ran, and `/skill-manager:sync` is the
 manual catch-up.
+
+## What `status` shows
+
+```
+[info] 4 registered, 4 installed
+[info] auto-update: on (mode=apply, every 6h)
+[info] last auto check: 34m ago (next due in 5.4h)
+[skill] scaffold            f80a65c        updated 3d ago
+[skill] foss-design-system  0802c49        no update recorded
+[info] 9 unregistered folders (--drift to list)
+```
+
+Each skill's short SHA is read **live** from its checkout, so it's true even if you pulled or
+committed there by hand. The "last update" is when *this tool* last moved it — that can't be
+recovered from git, so it's recorded as it happens. `no update recorded` means the skill hasn't
+changed since you registered it, which is the normal state after adopting folders already at their
+latest commit.
+
+`--drift` expands the unregistered-folder count into a list.
 
 ## Session-start line
 
-Each new or resumed session opens with a one-liner, so staleness is visible without asking:
+Each new or resumed session opens with a one-liner — the only place the plugin volunteers anything:
 
 ```
-[skill-manager] 4 skills · checked 15m ago · next in 5.8h
+[skill-manager] 4 skills · git updated · checked 2m ago · next in 5.9h
 ```
 
-Purely local — the registry and one `stat`, no network, no git. It stays quiet when there's nothing
-to say (no registry, or nothing registered) and reports the states that matter: `never checked`,
-`next check due` when overdue, `auto-update off`, and `N not installed`. It doesn't fire on `/clear`
-or a compaction, which happen mid-work. Set `sessionStatus: false` to turn it off.
+`git updated` is the important part. Because updates land for a *later* session, this is where you
+find out one happened — and each is announced **exactly once**, then never again.
+
+Purely local otherwise — the registry and one `stat`, no network, no git. It stays quiet when there's
+nothing to say (no registry, nothing registered) and reports the states that matter: `never checked`,
+`next check due` when overdue, `auto-update off`, `N not installed`.
+
+**On `/clear` you get news only:**
+
+```
+[skill-manager] b updated
+```
+
+…and nothing at all if nothing changed. You're mid-work there and already know your own state, so
+the counts and timings would just be noise — but an update you haven't heard about still earns a
+line. A compaction shows nothing, since it can fire repeatedly inside one long task. Both still get
+a free chance to run the background update.
+
+Set `sessionStatus: false` to silence the line everywhere.
 
 ## The registry
 
@@ -132,6 +168,7 @@ the repo is cloned once into a hidden cache, hard-synced to the ref, and the sub
 | flag | effect |
 |---|---|
 | `--only NAME` | restrict `sync`/`list` to one entry |
+| `--drift` | `status`: list the unregistered folders instead of just counting them |
 | `--dry-run` | print planned actions, change nothing |
 | `--force` | `clone` mode: hard-reset to the ref, **discarding local commits and edits** |
 | `--purge` | `remove`: also delete the folder. Refuses on uncommitted or unpushed work — and refuses if the remote can't be reached to check — unless `--force` |
@@ -147,9 +184,9 @@ folder is a real checkout and you have work in it. Commit and push, or `--force`
 **"exists but is not a git checkout" / "origin is … not the registered …".** Something else is in
 the way. Move it aside and re-run; sync won't overwrite it.
 
-**Everything shows as `[drift]`.** Drift is any folder in the skills directory that no registry
-entry claims. On a fresh registry that's every skill you already had — expected. Add entries for the
-ones you want managed.
+**"N unregistered folders".** Any folder in the skills directory that no registry entry claims — on a
+fresh registry, every skill you already had. Expected, not a fault. `/skill-manager:status --drift`
+lists them; register the ones you want managed and ignore the rest.
 
 **`last auto check: never`.** Either `autoUpdate` is off, the registry is empty, or your sessions
 aren't ending cleanly. `/skill-manager:sync` works regardless.

@@ -26,7 +26,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const P = require('./paths');
 const R = require('./registry');
@@ -45,8 +45,13 @@ if (NODE_MAJOR < 18) {
 const TMP_SUFFIX = '.skm-tmp'; // staging dir for atomic-ish swap
 const OLD_SUFFIX = '.skm-old'; // backup during swap
 const GIT_TIMEOUT_MS = 600_000; // manual runs: guard a hung network/auth op
-const AUTO_DEADLINE_MS = 20_000; // auto runs: bound the whole pass
-const AUTO_PER_OP_CAP_MS = 10_000; // auto runs: bound any single git op
+// `auto` runs detached, so nothing is waiting on it and the deadline is a
+// runaway guard rather than a latency budget. It was 20s when the pass ran
+// inside a SessionEnd hook; that proved far too tight -- session teardown
+// killed the hook 1-2s in, before four SSH probes could finish, so unattended
+// updates never completed. Detaching removed the need to be stingy.
+const AUTO_DEADLINE_MS = 300_000; // 5 min for the whole pass
+const AUTO_PER_OP_CAP_MS = 60_000; // 1 min for any single git op
 const LOCK_STALE_MS = 10 * 60 * 1000; // a lock older than this is a crash leftover
 
 const EXIT_OK = 0;
@@ -590,6 +595,24 @@ function copySync(e, target, cacheRoot, repoState, ctx) {
 // ============ PROBE: is this entry behind? =================================
 
 /**
+ * The git checkout that speaks for an entry.
+ *
+ * For `clone` mode that is the installed folder itself. For `copy` mode the
+ * target has no .git, so the cache holds the real checkout -- which is why the
+ * SHA of a copied skill has to be read from the cache, not from what the user
+ * sees on disk.
+ */
+function entryRepoDir(e, target, cacheRoot) {
+  return e.mode === 'copy' ? path.join(cacheRoot, R.repoSlug(e.repo)) : target;
+}
+
+/** Resolved HEAD of an entry's checkout, or '' when there isn't one yet. */
+function entrySha(e, target, cacheRoot, ctx) {
+  const repoDir = entryRepoDir(e, target, cacheRoot);
+  return isGitRepo(repoDir, ctx) ? headSha(repoDir, ctx) : '';
+}
+
+/**
  * Cheap "does this entry need updating" check.
  *
  * One `git ls-remote` round-trip at most, and none at all for a SHA-pinned
@@ -598,7 +621,7 @@ function copySync(e, target, cacheRoot, repoState, ctx) {
  */
 function probeEntry(e, target, cacheRoot, ctx) {
   const isCopy = e.mode === 'copy';
-  const repoDir = isCopy ? path.join(cacheRoot, R.repoSlug(e.repo)) : target;
+  const repoDir = entryRepoDir(e, target, cacheRoot);
 
   if (!fs.existsSync(target)) return { behind: true, why: 'not installed' };
   if (!isGitRepo(repoDir, ctx)) {
@@ -639,9 +662,13 @@ function cmdSync(entries, ctx) {
   if (!ctx.dryRun) fs.mkdirSync(ctx.skillsDir, { recursive: true });
   const selected = applyOnly(entries, ctx.only);
   const repoState = new Map(); // slug -> "ok" | SyncError
+  const regDirs = entries.map((x) => x.dir);
   let failures = 0;
   for (const e of selected) {
     const target = path.join(ctx.skillsDir, e.dir);
+    // Read the SHA before applying so an update can be distinguished from a
+    // no-op fetch -- `sync` otherwise has no idea whether anything moved.
+    const before = ctx.dryRun ? '' : entrySha(e, target, cacheRoot, ctx);
     let status;
     try {
       status = e.mode === 'clone' ? cloneSync(e.repo, e.ref, target, ctx) : copySync(e, target, cacheRoot, repoState, ctx);
@@ -652,6 +679,8 @@ function cmdSync(entries, ctx) {
       continue;
     }
     if (!ctx.dryRun && status !== 'skipped') {
+      const after = entrySha(e, target, cacheRoot, ctx);
+      if (after && after !== before) recordUpdate(e.dir, after, regDirs);
       log('ok', `${e.dir} @ ${e.ref}${status === 'new' ? ' (new)' : ''}`);
     }
   }
@@ -703,8 +732,50 @@ function cmdStatus(entries, ctx) {
     );
   }
 
-  for (const name of driftNames(ctx.skillsDir, regDirs)) {
-    log('drift', `${name}  (present but not in registry)`);
+  // Per-skill: the SHA is read LIVE rather than from the update record, so it
+  // is the truth even when a skill was moved outside this tool (a hand pull, a
+  // local commit). The timestamp can only come from the record -- git cannot
+  // say when *we* last moved a checkout.
+  if (entries.length) {
+    const cacheRoot = path.join(ctx.skillsDir, R.CACHE_DIRNAME);
+    const updates = readUpdates();
+    const width = Math.max(...entries.map((e) => e.dir.length));
+    for (const e of entries) {
+      const target = path.join(ctx.skillsDir, e.dir);
+      let sha = '';
+      try {
+        sha = entrySha(e, target, cacheRoot, ctx);
+      } catch {
+        sha = '';
+      }
+      const rec = updates[e.dir];
+      let when = 'no update recorded';
+      if (rec && rec.at) {
+        const age = Date.now() - Date.parse(rec.at);
+        when = Number.isFinite(age) ? `updated ${fmtAge(age)} ago` : 'no update recorded';
+        // The live SHA is truth; the record says where the last *applied* update
+        // left it. When they disagree, something moved the checkout outside this
+        // tool -- a hand pull, reset, or local commit -- and reporting the
+        // timestamp alone would imply the current state came from that update.
+        if (sha && rec.sha && sha.slice(0, 7) !== rec.sha) when += ' (moved since)';
+      }
+      // padEnd must exceed the longest value ('not installed', 13) or the
+      // columns run together.
+      const shaCol = (sha ? sha.slice(0, 7) : 'not installed').padEnd(15);
+      log('skill', `${e.dir.padEnd(width)}  ${shaCol}${when}`);
+    }
+  }
+
+  // Drift is summarized, not listed. Most unregistered folders are local-only
+  // skills that will never be registered, so listing them every time buries the
+  // lines above -- and a status command nobody reads is worse than a terse one.
+  const drift = driftNames(ctx.skillsDir, regDirs);
+  if (drift.length) {
+    if (ctx.drift) {
+      for (const name of drift) log('drift', `${name}  (present but not in registry)`);
+    } else {
+      log('info', `${drift.length} unregistered folder${drift.length === 1 ? '' : 's'} (--drift to list)`);
+    }
   }
   return EXIT_OK;
 }
@@ -825,6 +896,7 @@ function cmdAuto(ctx, entries) {
   try {
     const cacheRoot = path.join(ctx.skillsDir, R.CACHE_DIRNAME);
     const repoState = new Map();
+    const regDirs = entries.map((x) => x.dir);
     for (const e of entries) {
       if (ctx.budget.exhausted()) {
         ranOut += 1;
@@ -842,11 +914,14 @@ function cmdAuto(ctx, entries) {
           changed.push(`${e.dir} (available)`);
           continue;
         }
+        const before = entrySha(e, target, cacheRoot, ctx);
         const status =
           e.mode === 'clone' ? cloneSync(e.repo, e.ref, target, ctx) : copySync(e, target, cacheRoot, repoState, ctx);
         if (status === 'skipped') {
           skipped.push(e.dir);
         } else {
+          const after = entrySha(e, target, cacheRoot, ctx);
+          if (after && after !== before) recordUpdate(e.dir, after, regDirs);
           log('ok', `${e.dir} @ ${e.ref}${status === 'new' ? ' (new)' : ''} [${p.why}]`);
           changed.push(`${e.dir}${status === 'new' ? ' (new)' : ''}`);
         }
@@ -886,15 +961,27 @@ function cmdAuto(ctx, entries) {
  *
  * Returns the line to show, or null to stay silent.
  */
-function cmdSessionStatus(ctx, entries) {
+function cmdSessionStatus(ctx, entries, { updatesOnly = false } = {}) {
   const s = ctx.settings;
   if (!s.sessionStatus) return null;
   if (!entries.length) return null; // nothing registered: say nothing at all
+
+  // Updates land for the *next* session by construction, so a session boundary
+  // is the only place the user naturally finds out about them. Report each one
+  // exactly once: anything recorded after the last report marker is news.
+  const unreported = unreportedUpdates(entries);
+
+  // On `clear` the user is mid-work and already knows their own state, so the
+  // counts and timings would be pure noise. News, or nothing.
+  if (updatesOnly) {
+    return unreported.length ? `[skill-manager] ${fmtUpdated(unreported)}` : null;
+  }
 
   const installed = entries.filter((e) => isDir(path.join(ctx.skillsDir, e.dir))).length;
   const missing = entries.length - installed;
   const parts = [`${entries.length} skill${entries.length === 1 ? '' : 's'}`];
   if (missing > 0) parts.push(`${missing} not installed`);
+  if (unreported.length) parts.push(fmtUpdated(unreported));
 
   if (!s.autoUpdate) {
     parts.push('auto-update off');
@@ -909,6 +996,79 @@ function cmdSessionStatus(ctx, entries) {
     }
   }
   return `[skill-manager] ${parts.join(' · ')}`;
+}
+
+/** "git updated" / "git, spec updated" / "a, b, c +2 updated". */
+function fmtUpdated(dirs) {
+  const shown = dirs.slice(0, 3).join(', ');
+  const more = dirs.length > 3 ? ` +${dirs.length - 3}` : '';
+  return `${shown}${more} updated`;
+}
+
+/**
+ * Registered skills whose recorded update is newer than the last report.
+ *
+ * No marker file yet means nothing has ever been reported, so everything
+ * recorded counts as news -- correct for a first run, and it means an update
+ * applied before this feature existed still gets announced once.
+ */
+function unreportedUpdates(entries) {
+  let since = 0;
+  try {
+    since = fs.statSync(P.reportPath()).mtimeMs;
+  } catch {
+    since = 0;
+  }
+  const updates = readUpdates();
+  return entries
+    .filter((e) => {
+      const rec = updates[e.dir];
+      if (!rec || !rec.at) return false;
+      const at = Date.parse(rec.at);
+      return Number.isFinite(at) && at > since;
+    })
+    .map((e) => e.dir);
+}
+
+/** Mark everything currently recorded as reported. Best-effort. */
+function markReported() {
+  try {
+    const f = P.reportPath();
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, new Date().toISOString() + '\n', 'utf8');
+  } catch {
+    /* worst case an update is announced twice */
+  }
+}
+
+/**
+ * Launch the update pass as a detached background process.
+ *
+ * The pass must outlive the hook that starts it. Running it inline in a
+ * SessionEnd hook failed in practice -- teardown killed it 1-2s in, before the
+ * probes finished, so nothing ever updated and nothing said so. Spawned
+ * detached from SessionStart it has the whole session to work in, and startup
+ * pays nothing but the spawn.
+ *
+ * stdio is discarded because the parent exits immediately: the child's findings
+ * go to the log, and the next session start reports them.
+ */
+function spawnDetachedAuto(ctx) {
+  try {
+    const args = [__filename, 'auto'];
+    // Forward the overrides so a scratch/test invocation stays isolated.
+    if (ctx.registry) args.push('--registry', ctx.registryFile);
+    if (ctx.skillsDir) args.push('--skills-dir', ctx.skillsDir);
+    const child = spawn(process.execPath, args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false; // a failed spawn must never disturb session start
+  }
 }
 
 /**
@@ -948,6 +1108,36 @@ function driftNames(skillsDir, registryDirs) {
   return R.computeDrift(dirs, registryDirs);
 }
 
+/** Read the per-skill update records; {} on any problem (it is only state). */
+function readUpdates() {
+  try {
+    const data = JSON.parse(fs.readFileSync(P.updatesPath(), 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Record that `dir` moved to `sha`, pruning skills no longer registered.
+ *
+ * Best-effort: this is derived state, so a failure here must never turn a
+ * successful update into a reported failure.
+ */
+function recordUpdate(dir, sha, registryDirs) {
+  try {
+    const f = P.updatesPath();
+    const updates = R.pruneUpdates(readUpdates(), registryDirs);
+    updates[dir] = { sha: sha.slice(0, 7), at: new Date().toISOString() };
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    const tmp = `${f}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, `${JSON.stringify(updates, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, f);
+  } catch {
+    /* derived state; losing it costs a dash in `status` */
+  }
+}
+
 function stampAgeMs() {
   try {
     return Date.now() - fs.statSync(P.stampPath()).mtimeMs;
@@ -974,7 +1164,31 @@ function fmtAge(ms) {
   return `${Math.round(hrs / 24)}d`;
 }
 
-/** Non-blocking cross-session mutex, with stale-lock recovery. */
+/** True if a process with this pid exists (signal 0 tests without sending). */
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM means it exists but belongs to someone else -- still alive.
+    return e.code === 'EPERM';
+  }
+}
+
+/**
+ * Non-blocking cross-session mutex, with stale-lock recovery.
+ *
+ * Reclaims on a DEAD OWNER first, and only falls back to age. This matters
+ * because `auto` runs from a SessionEnd hook, which can be killed by session
+ * teardown before its `finally` releases the lock -- observed in practice, not
+ * hypothetically. Waiting out an age threshold in that case would silently
+ * block every subsequent run for the whole window; if teardown kills the hook
+ * every time, nothing would ever update and nothing would say so.
+ *
+ * The age fallback stays for the case where the pid is unreadable or has been
+ * recycled by an unrelated process.
+ */
 function acquireLock(depth = 0) {
   const f = P.lockPath();
   try {
@@ -985,9 +1199,11 @@ function acquireLock(depth = 0) {
     return true;
   } catch (e) {
     if (e.code !== 'EEXIST' || depth > 0) return false;
-    // A crashed run leaves the lock behind; reclaim it once it is clearly old.
     try {
-      if (Date.now() - fs.statSync(f).mtimeMs > LOCK_STALE_MS) {
+      const owner = Number.parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
+      const dead = Number.isInteger(owner) ? !pidAlive(owner) : true;
+      const old = Date.now() - fs.statSync(f).mtimeMs > LOCK_STALE_MS;
+      if (dead || old) {
         fs.unlinkSync(f);
         return acquireLock(depth + 1);
       }
@@ -1029,7 +1245,7 @@ const USAGE = `skill-manager sync engine
 Commands:
   sync                 clone missing entries + update all to their pinned ref
   list                 print each entry: dir, repo, ref, subdir, installed?
-  status               summary, auto-update state, and drift
+  status               summary, auto-update state, unregistered-folder count
   add <repo-url>       add an entry to the registry, then install it
   remove <name>        drop an entry from the registry
   auto                 throttled SessionEnd hook entry point (always exits 0)
@@ -1045,6 +1261,7 @@ Flags:
   --ref / --subdir / --dir / --mode    (add) entry fields
   --no-sync            (add) register only, don't install
   --purge              (remove) also delete the folder
+  --drift              (status) list the unregistered folders instead of counting
 `;
 
 function parseArgs(argv) {
@@ -1059,6 +1276,7 @@ function parseArgs(argv) {
     verbose: false,
     noSync: false,
     purge: false,
+    drift: false,
     ref: null,
     subdir: null,
     dir: null,
@@ -1080,6 +1298,7 @@ function parseArgs(argv) {
     '-v': 'verbose',
     '--no-sync': 'noSync',
     '--purge': 'purge',
+    '--drift': 'drift',
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -1161,21 +1380,39 @@ function main(argv) {
   }
 
   if (isSessionStatus) {
-    // Deliberately before requireGit(): this path never shells out to git, so
-    // a missing git must not turn a status line into an error at session start.
-    // Fires only on a genuinely new or resumed session -- `clear` and `compact`
-    // happen mid-work, where an unsolicited banner is noise. An empty `source`
-    // (running it by hand) is allowed through so it stays testable.
+    // Deliberately before requireGit(): the status half never shells out to
+    // git, so a missing git must not turn a session start into an error.
     let line = null;
+    let src = '';
     try {
-      const src = String(readHookInput().source || '');
-      if (!src || src === 'startup' || src === 'resume') {
-        line = cmdSessionStatus(ctx, entries);
+      src = String(readHookInput().source || '');
+      // Full banner on a genuinely new or resumed session (and when run by hand,
+      // so it stays testable). On `clear` the user is mid-work: news only, and
+      // silence when there is none. `compact` gets nothing at all -- it can fire
+      // repeatedly inside one long task.
+      const full = !src || src === 'startup' || src === 'resume';
+      if (full || src === 'clear') {
+        line = cmdSessionStatus(ctx, entries, { updatesOnly: !full });
+        // Only mark when something was actually shown, or a `clear` with no news
+        // would silently consume updates a later startup should have announced.
+        if (line) markReported();
       }
     } catch {
       line = null; // never disturb a session start
     }
     if (line) process.stdout.write(JSON.stringify({ systemMessage: line }) + '\n');
+
+    // Then hand the update pass to a detached child and get out of the way.
+    // Unlike the banner this runs for EVERY source: `clear` and `compact` are
+    // free extra chances to catch up, and the throttle makes them nearly free.
+    try {
+      const s = ctx.settings;
+      const age = stampAgeMs();
+      const due = age === null || age >= s.checkIntervalHours * 3_600_000;
+      if (s.autoUpdate && entries.length && due) spawnDetachedAuto(ctx);
+    } catch {
+      /* startup must succeed regardless */
+    }
     return EXIT_OK;
   }
 

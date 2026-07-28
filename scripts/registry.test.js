@@ -171,6 +171,22 @@ test('computeDrift ignores dotfolders and matches case-insensitively', () => {
   assert.deepEqual(drift, ['stray']);
 });
 
+test('pruneUpdates keeps only registered skills', () => {
+  const updates = {
+    spec: { sha: 'aaaaaaa', at: '2026-07-01T00:00:00Z' },
+    gone: { sha: 'bbbbbbb', at: '2026-07-01T00:00:00Z' },
+  };
+  const kept = R.pruneUpdates(updates, ['spec', 'git']);
+  assert.deepEqual(Object.keys(kept), ['spec'], 'a removed skill drops out');
+  assert.equal(kept.spec.sha, 'aaaaaaa', 'surviving records are untouched');
+  // Case-sensitive on purpose: these keys are the resolved dir names the
+  // registry already de-duplicated case-insensitively, so an exact match is
+  // correct and avoids two records collapsing into one.
+  assert.deepEqual(R.pruneUpdates({ Spec: {} }, ['spec']), {});
+  assert.deepEqual(R.pruneUpdates(null, ['spec']), {}, 'missing state is not an error');
+  assert.deepEqual(R.pruneUpdates({ a: {} }, []), {}, 'empty registry prunes everything');
+});
+
 test('readRegistryFile rejects a misshaped top level', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skm-test-'));
   const f = path.join(dir, 'skills.json');

@@ -226,6 +226,21 @@ function emptyRegistry() {
 }
 
 /**
+ * Drop update records for skills no longer in the registry.
+ *
+ * Pure. Keeps the state file from accumulating entries forever as skills are
+ * removed and re-added, without needing a separate cleanup step.
+ */
+function pruneUpdates(updates, registryDirs) {
+  const keep = new Set(registryDirs);
+  const out = {};
+  for (const [dir, rec] of Object.entries(updates || {})) {
+    if (keep.has(dir)) out[dir] = rec;
+  }
+  return out;
+}
+
+/**
  * Return sorted dir names present but not registered.
  *
  * Pure: the caller supplies the directory listing. Dotfolders (including the
@@ -259,4 +274,5 @@ module.exports = {
   writeRegistryFile,
   emptyRegistry,
   computeDrift,
+  pruneUpdates,
 };

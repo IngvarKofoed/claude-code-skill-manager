@@ -11,3 +11,37 @@ Each entry is numbered with a monotonically increasing integer. Append new entri
    is why the update work sits at session end, where it costs nothing, rather than session start.
    The registry lives in the XDG config dir, deliberately outside the plugin payload, which Claude
    Code replaces wholesale on every plugin update.
+
+2. `status` now summarizes unregistered folders as a single count; `--drift` lists them.
+   With a small registry the per-folder lines outnumbered the status itself, burying the counts and
+   check times that are the point of the command.
+   Most unregistered folders are local-only skills that will never be registered, so the list is
+   rarely the answer to why someone ran `status`.
+
+3. `status` now shows each skill's short SHA and when it last changed.
+   The SHA is read live from the checkout so it stays true even after a hand pull; the timestamp is
+   persisted to `updates.json` as updates are applied, because git cannot say when *this tool* last
+   moved a checkout.
+   Records are pruned to the registry on write, and every write is best-effort — losing the file
+   costs a dash in `status`, so it must never turn a successful update into a reported failure.
+   A `(moved since)` marker appears when the live SHA disagrees with the recorded one, so the
+   timestamp can never imply the current checkout came from that update.
+
+4. The update pass now runs as a **detached child spawned at session start**; the `SessionEnd` hook
+   is gone.
+   Inline in `SessionEnd` it never completed: teardown killed it 1–2s in, before four `ls-remote`
+   probes finished, leaving no log, no stamp and a leaked lock — silently. Startup now pays only the
+   spawn (~26 ms) and the pass inherits the session's lifetime, so the deadline could go 20s → 5 min.
+   The lock now reclaims on a **dead owner**, not just age: a killed pass leaves it behind, and an
+   age-only rule blocked every retry for the whole window.
+
+5. The session-start line now names the skills updated since it last spoke, exactly once.
+   Updates land for a later session by construction, so this is the only place the user finds out one
+   happened; a `last-report` marker is stamped as the line prints, making anything newer news.
+
+6. `/clear` now shows the line too, but only as news — the updated skill names alone, and nothing
+   when nothing changed.
+   Mid-work the counts and timings are noise, yet an unannounced update still deserves a line;
+   compaction stays fully silent because it can fire repeatedly inside one task.
+   The report marker is stamped only when a line was actually shown, so a quiet `clear` cannot
+   swallow updates a later startup should announce.

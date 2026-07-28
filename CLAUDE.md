@@ -1,6 +1,6 @@
 # claude-code-skill-manager
 
-A Claude Code plugin that keeps a user-defined set of skill repos installed as editable git clones you can push from, and refreshes them automatically when a session ends.
+A Claude Code plugin that keeps a user-defined set of skill repos installed as editable git clones you can push from, and refreshes them automatically in the background.
 
 ## Always read first
 
@@ -34,7 +34,7 @@ Same change, bad vs. good entry:
 
 ## Nested guidance
 
-- `scripts/CLAUDE.md` — the Node engine: path resolution, registry validation, git plumbing, the two install modes, and the `SessionEnd` auto path. All executable code lives here.
+- `scripts/CLAUDE.md` — the Node engine: path resolution, registry validation, git plumbing, the two install modes, and the detached `auto` pass. All executable code lives here.
 
 The remaining directories are small enough to be governed by this file: `.claude-plugin/` (two JSON manifests), `commands/` and `skills/skill-manager/` (agent-facing markdown), `hooks/` (one JSON file), `docs/`.
 

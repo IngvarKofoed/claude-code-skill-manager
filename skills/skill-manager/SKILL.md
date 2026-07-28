@@ -1,6 +1,6 @@
 ---
 name: skill-manager
-description: Install, sync, and update the user's Claude Code skills from their own registry of GitHub repos. Use when the user says things like "update my skills", "sync skills", "install a skill from github", "add this repo as a skill", "refresh my skills", "check my skill status", "list my registered skills", or "stop tracking that skill". Skills are installed as editable git clones under the skills directory and also refresh automatically on session end.
+description: Install, sync, and update the user's Claude Code skills from their own registry of GitHub repos. Use when the user says things like "update my skills", "sync skills", "install a skill from github", "add this repo as a skill", "refresh my skills", "check my skill status", "list my registered skills", or "stop tracking that skill". Skills are installed as editable git clones under the skills directory and also refresh automatically via a background pass.
 ---
 
 # Skill Manager
@@ -43,28 +43,36 @@ The engine prints single prefixed lines. Surface them verbatim or summarize fait
   discards the work and should only be used on an explicit request.
 - `[error] foo: ...` — a genuine failure. The engine continues past it and exits nonzero, so read
   the whole output and name **every** entry that failed.
-- `[drift] foo (present but not in registry)` — a folder no entry claims. Expected for skills the
-  user installed by hand.
+- `[info] 9 unregistered folders (--drift to list)` — folders no registry entry claims. Expected for
+  skills installed by hand or maintained elsewhere; `status --drift` lists them individually as
+  `[drift]` lines. Never present the count as a problem to fix.
+- `[skill] spec  cad9a29  updated 3d ago` — from `status`: the skill's current short SHA (read live
+  from its checkout, so always accurate) and when this tool last moved it. `no update recorded` means
+  it hasn't changed since it was registered — normal, not a fault.
 
 ## Automatic updates
 
-A `SessionEnd` hook runs the same engine in a throttled `auto` mode: at most once every
-`checkIntervalHours` (default 6), bounded by a hard 20-second deadline so a stalled network can
-never hold a session open on quit. It probes with `git ls-remote` — one round-trip per entry, and
-none at all for a SHA-pinned one — and only fetches what is actually behind.
+There is **one** hook, on `SessionStart`. It does two things and returns immediately:
 
-**Updates become active from the next session.** Claude Code discovers skills *before* hooks run,
-so no hook can refresh the session it fires in. This is a property of the design, not a bug — if
-the user wants a skill live immediately, they need `/reload-skills` or a restart after syncing.
+1. **Prints a one-line summary** — `[skill-manager] 4 skills · git updated · checked 2m ago · next in
+   5.9h`. Purely local (registry plus one `stat`); silent when nothing is registered. On `/clear` it
+   prints **only** news (`[skill-manager] b updated`) and nothing when there is none; a compaction
+   prints nothing at all.
+2. **Spawns a detached background pass** if the throttle (`checkIntervalHours`, default 6) is due.
+   That pass probes with `git ls-remote` — one round-trip per entry, none at all for a SHA-pinned one
+   — fetches only what is behind, and never passes `--force`.
 
-The hook is deliberately silent when nothing changed, and never passes `--force`. Its history goes
-to a log in the state directory; `/skill-manager:status` reports when it last ran.
+**Updates become active from the next session.** Claude Code discovers skills *before* hooks run, so
+no hook can refresh the session it fires in. That is why the line reports what changed: it is the
+first moment the user can act on it. Each update is announced exactly once. If the user wants a skill
+live immediately they need `/reload-skills` or a restart after syncing.
 
-A second `SessionStart` hook prints a one-line summary at the start of each new or resumed session —
-`[skill-manager] 4 skills · checked 15m ago · next in 5.8h`. It is purely local (registry plus one
-`stat`, no network, no git), stays silent when nothing is registered, and is switched off with
-`sessionStatus: false`. If the user asks why they are seeing it, or wants it gone, that setting is
-the answer — not disabling `autoUpdate`, which is a different thing.
+The pass runs detached rather than in a `SessionEnd` hook because that was tried and failed — session
+teardown killed it before it finished, silently. Its history goes to a log in the state directory;
+`/skill-manager:status` reports when it last ran.
+
+To silence the line, `sessionStatus: false`. That is the answer if the user asks why they are seeing
+it — **not** `autoUpdate: false`, which stops updates entirely and is a different thing.
 
 ## The registry
 

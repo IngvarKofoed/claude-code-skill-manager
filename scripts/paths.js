@@ -53,6 +53,28 @@ function logPath() {
 }
 
 /**
+ * Per-skill record of the last applied update: { dir: { sha, at } }.
+ *
+ * State, not config: it is derived from what the engine did and is safe to
+ * delete. "When did this skill last change" cannot be recovered after the fact
+ * from git alone, which is why it has to be written down as it happens.
+ */
+function updatesPath() {
+  return path.join(stateDir(), 'updates.json');
+}
+
+/**
+ * Marker for "everything recorded before this was already shown to the user".
+ *
+ * Its mtime is the cutoff: an update whose timestamp is newer has not been
+ * reported at a session start yet. Kept separate from updates.json so the
+ * per-skill records stay a clean map that can be pruned without special cases.
+ */
+function reportPath() {
+  return path.join(stateDir(), 'last-report');
+}
+
+/**
  * Target skills directory: $CLAUDE_SKILLS_DIR, else ~/.claude/skills.
  * A --skills-dir flag overrides this at the call site.
  */
@@ -79,6 +101,8 @@ module.exports = {
   stampPath,
   lockPath,
   logPath,
+  updatesPath,
+  reportPath,
   skillsDir,
   expandHome,
 };
