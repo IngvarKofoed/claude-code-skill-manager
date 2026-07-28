@@ -1,0 +1,11 @@
+{
+  "name": "skill-manager",
+  "version": "0.1.0",
+  "description": "Keep a user-defined set of Claude Code skills in sync with their GitHub repos — installed as editable git clones you can push from, updated automatically on session end.",
+  "author": {
+    "name": "Ingvar Kofoed"
+  },
+  "homepage": "https://github.com/IngvarKofoed/claude-code-skill-manager",
+  "repository": "https://github.com/IngvarKofoed/claude-code-skill-manager",
+  "license": "MIT"
+}

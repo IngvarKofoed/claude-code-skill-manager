@@ -1,0 +1,15 @@
+{
+  "name": "claude-code-skill-manager",
+  "description": "Ingvar Kofoed's skill-manager — keeps your own Claude Code skill repos installed as editable git clones and updated automatically.",
+  "owner": {
+    "name": "Ingvar Kofoed"
+  },
+  "plugins": [
+    {
+      "name": "skill-manager",
+      "source": "./",
+      "description": "Keep a user-defined set of Claude Code skills in sync with their GitHub repos — installed as editable git clones you can push from, updated automatically on session end.",
+      "version": "0.1.0"
+    }
+  ]
+}

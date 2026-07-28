@@ -1,0 +1,13 @@
+{
+  "name": "claude-code-skill-manager",
+  "version": "0.1.0",
+  "description": "Keep a user-defined set of Claude Code skills in sync with their GitHub repos.",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test scripts/*.test.js"
+  }
+}
