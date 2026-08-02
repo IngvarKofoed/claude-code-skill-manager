@@ -48,6 +48,9 @@ Start with `add`:
 
 New skills load at session start, so `/reload-skills` or a restart after adding one.
 
+Nothing to register yet? [`RECOMMENDED_SKILLS.md`](RECOMMENDED_SKILLS.md) is a starting set —
+copy-paste prompts for `spec`, `scaffold`, `fix-code` and `git`.
+
 ## Adopting skills you already have
 
 If you were installing skills by hand before, `discover` tells you which of them can be tracked:

@@ -53,3 +53,10 @@ Each entry is numbered with a monotonically increasing integer. Append new entri
    Deliberately reports rather than adopts, matching the standing non-goal, and stays offline: origin
    URL, branch and folder name are all local. A `copy`-mode skill has no `.git`, so it cannot be
    distinguished from a local-only folder and needs `--subdir` by hand.
+
+8. `RECOMMENDED_SKILLS.md` gives new users a starting registry — `spec`, `scaffold`, `fix-code`,
+   `git`, plus the FOSS-internal `foss-design-system` — as copy-pasteable prompts.
+   The registry starts empty by design, which leaves a first-run blank page; this fills it without
+   seeding anything automatically.
+   Public repos are listed over HTTPS so they clone with no key setup, with the SSH forms kept for
+   anyone who will edit and push a skill back.
