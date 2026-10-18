@@ -70,3 +70,6 @@ Each entry is numbered with a monotonically increasing integer. Append new entri
 10. `$CLAUDE_CONFIG_DIR` now relocates both the registry and the default skills dir.
     Previously the skills dir was hardcoded to `~/.claude/skills`, so with it set, skills were
     installed where Claude Code never looked.
+
+11. 0.4.0 is the first release with the registry beside the skills (9) and `$CLAUDE_CONFIG_DIR`
+    support (10); "up to 0.3.0" in the docs means the old XDG location.

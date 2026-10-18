@@ -1,6 +1,6 @@
 {
   "name": "skill-manager",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Keep a user-defined set of Claude Code skills in sync with their GitHub repos — installed as editable git clones you can push from, refreshed automatically in the background.",
   "author": {
     "name": "Ingvar Kofoed"
