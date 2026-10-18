@@ -1,26 +1,31 @@
 'use strict';
-// XDG-style path resolution for skill-manager.
+// Path resolution for skill-manager.
 //
-// Deliberately mirrors claude-code-notifier/scripts/paths.js so all three
-// plugins put their config and state in the same places. Config is
-// user-owned and hand-editable; state is machine-owned and disposable.
+// The registry lives in Claude Code's own config dir, beside the skills it
+// lists: whoever backs up or syncs ~/.claude carries the list along with the
+// clones. It used to sit in the XDG config dir, which a ~/.claude backup
+// silently left behind -- the clones restored, the registry did not.
 //
-// The registry MUST live outside the plugin payload: a plugin installed from
-// a marketplace lives in a version-pinned cache dir that Claude Code replaces
+// It MUST stay outside the plugin payload: a plugin installed from a
+// marketplace lives in a version-pinned cache dir that Claude Code replaces
 // wholesale on update, which would destroy a registry shipped inside it.
+// ${CLAUDE_PLUGIN_DATA} is no better: it is keyed by install source and
+// deleted on uninstall.
+//
+// State stays XDG and machine-local on purpose (mirroring
+// claude-code-notifier/scripts/paths.js): a lock pid, a throttle stamp and an
+// "already announced" marker restored onto another machine would be wrong.
 
 const path = require('path');
 const os = require('os');
 
 const APP_NAME = 'claude-code-skill-manager';
 
-function configDir() {
-  if (process.platform === 'win32') {
-    const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-    return path.join(base, APP_NAME);
-  }
-  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  return path.join(base, APP_NAME);
+/** Claude Code's config dir: $CLAUDE_CONFIG_DIR, else ~/.claude. */
+function claudeDir() {
+  const raw = process.env.CLAUDE_CONFIG_DIR;
+  if (raw && raw.trim()) return path.resolve(expandHome(raw.trim()));
+  return path.join(os.homedir(), '.claude');
 }
 
 function stateDir() {
@@ -34,7 +39,20 @@ function stateDir() {
 
 /** The skill registry. Resolution order is applied by the caller. */
 function registryPath() {
-  return path.join(configDir(), 'skills.json');
+  return path.join(claudeDir(), 'skill-manager', 'skills.json');
+}
+
+/**
+ * Where the registry lived up to 0.3.0. Read only to migrate it to
+ * registryPath(); nothing writes here any more.
+ */
+function legacyRegistryPath() {
+  if (process.platform === 'win32') {
+    const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(base, APP_NAME, 'skills.json');
+  }
+  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  return path.join(base, APP_NAME, 'skills.json');
 }
 
 /** Throttle stamp: mtime is the last time `auto` completed a pass. */
@@ -75,13 +93,14 @@ function reportPath() {
 }
 
 /**
- * Target skills directory: $CLAUDE_SKILLS_DIR, else ~/.claude/skills.
- * A --skills-dir flag overrides this at the call site.
+ * Target skills directory: $CLAUDE_SKILLS_DIR, else <claudeDir>/skills --
+ * which is where Claude Code discovers personal skills when $CLAUDE_CONFIG_DIR
+ * relocates its config. A --skills-dir flag overrides this at the call site.
  */
 function skillsDir() {
   const raw = process.env.CLAUDE_SKILLS_DIR;
   if (raw && raw.trim()) return path.resolve(expandHome(raw.trim()));
-  return path.join(os.homedir(), '.claude', 'skills');
+  return path.join(claudeDir(), 'skills');
 }
 
 /** Expand a leading ~ so hand-edited config values behave as users expect. */
@@ -95,9 +114,10 @@ function expandHome(p) {
 
 module.exports = {
   APP_NAME,
-  configDir,
+  claudeDir,
   stateDir,
   registryPath,
+  legacyRegistryPath,
   stampPath,
   lockPath,
   logPath,

@@ -142,8 +142,11 @@ Set `sessionStatus: false` to silence the line everywhere.
 
 ## The registry
 
-`~/.config/claude-code-skill-manager/skills.json` (`%APPDATA%\claude-code-skill-manager\` on
-Windows) — deliberately outside the plugin, which gets replaced wholesale on every plugin update.
+`~/.claude/skill-manager/skills.json` (under `$CLAUDE_CONFIG_DIR` if you set it) — beside your
+skills, so backing up `~/.claude` keeps the list with the clones, and deliberately outside the
+plugin, which gets replaced wholesale on every plugin update. Up to 0.3.0 it lived in
+`~/.config/claude-code-skill-manager/` (`%APPDATA%\…` on Windows); a registry there is moved over
+automatically the first time the plugin runs.
 
 ```json
 {

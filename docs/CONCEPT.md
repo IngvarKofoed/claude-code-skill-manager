@@ -72,8 +72,9 @@ naturally learns it happened — so the one-line banner names what changed, once
   exists but is unreachable from the automatic path.
 - **Never hang, never nag.** The automatic pass is bounded by a hard wall-clock deadline and cannot
   prompt for git credentials. It prints nothing when nothing changed.
-- **The registry belongs to the user.** It lives in the config directory, not in the plugin, so a
-  plugin update cannot destroy it. It is plain JSON, hand-editable, and hand-edits survive tooling.
+- **The registry belongs to the user.** It lives in `~/.claude` beside the skills it lists, not in
+  the plugin — so a plugin update cannot destroy it, and backing up `~/.claude` carries the list
+  along with the clones. It is plain JSON, hand-editable, and hand-edits survive tooling.
 - **Windows is a real target.** Not an afterthought — reserved device names, read-only git objects,
   long paths, and the absence of symlink permissions are all handled explicitly.
 - **One runtime.** Node and `git`, nothing else. No npm packages.

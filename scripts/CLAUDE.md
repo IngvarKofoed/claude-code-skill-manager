@@ -2,7 +2,7 @@
 
 The whole engine. Everything executable in this repo lives here; see `docs/ARCHITECTURE.md` for how it fits the plugin around it.
 
-Contents: `paths.js` (XDG config/state resolution), `registry.js` (pure helpers + registry read/validate/write), `sync.js` (git plumbing, install modes, commands, CLI), `registry.test.js`.
+Contents: `paths.js` (registry / skills-dir / XDG state resolution), `registry.js` (pure helpers + registry read/validate/write/migrate), `sync.js` (git plumbing, install modes, commands, CLI), `registry.test.js`, `paths.test.js`.
 
 Node 18+, CommonJS, **Node builtins only — no npm dependencies, ever.** Adding one changes the plugin's install story (today: install it and it works), so it needs a decision in `docs/ARCHITECTURE.md` first, not a `package.json` edit.
 
@@ -12,9 +12,9 @@ Node 18+, CommonJS, **Node builtins only — no npm dependencies, ever.** Adding
 
 ## Testing
 
-`node --test scripts/*.test.js` (or `npm test`). Tests target the **pure** helpers in `registry.js` — naming, validation, slug stability, settings layering, drift, registry round-tripping. Each case corresponds to a guard that exists for a specific reason, so a test name that reads like trivia (`com10 is not reserved`) is load-bearing: do not delete a case without establishing why the guard it covers no longer matters.
+`node --test scripts/*.test.js` (or `npm test`). Tests target the **pure** helpers in `registry.js` — naming, validation, slug stability, settings layering, drift, registry round-tripping, legacy migration — plus path resolution in `paths.js`. Each case corresponds to a guard that exists for a specific reason, so a test name that reads like trivia (`com10 is not reserved`) is load-bearing: do not delete a case without establishing why the guard it covers no longer matters.
 
-The git-touching paths have **no unit coverage** and are verified by running `sync`, `add`, and `remove` against real repositories with `--registry` / `--skills-dir` / `XDG_STATE_HOME` pointed at scratch paths. Never smoke-test against the real `~/.claude/skills` or `~/.config/claude-code-skill-manager`. Do not introduce a different test framework, or any test dependency, without updating the architecture doc.
+The git-touching paths have **no unit coverage** and are verified by running `sync`, `add`, and `remove` against real repositories with `--registry` / `--skills-dir` / `XDG_STATE_HOME` pointed at scratch paths — or `CLAUDE_CONFIG_DIR` / `XDG_CONFIG_HOME` / `XDG_STATE_HOME` together, to exercise the default paths and the legacy migration. Never smoke-test against the real `~/.claude/skills`, `~/.claude/skill-manager`, or `~/.config/claude-code-skill-manager`. Do not introduce a different test framework, or any test dependency, without updating the architecture doc.
 
 ## Invariants — do not break these
 

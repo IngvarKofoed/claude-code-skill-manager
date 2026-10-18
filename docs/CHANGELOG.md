@@ -60,3 +60,13 @@ Each entry is numbered with a monotonically increasing integer. Append new entri
    seeding anything automatically.
    Public repos are listed over HTTPS so they clone with no key setup, with the SSH forms kept for
    anyone who will edit and push a skill back.
+
+9. The registry now lives at `~/.claude/skill-manager/skills.json`, beside the skills it lists.
+   In `~/.config` a restored `~/.claude` backup brought back the clones but silently lost the list.
+   Rejected `${CLAUDE_PLUGIN_DATA}`: keyed by install source and deleted on uninstall.
+   A registry at the old XDG path is moved over automatically; an existing new file always wins.
+   State stays XDG and machine-local — a lock pid or throttle stamp must not travel between machines.
+
+10. `$CLAUDE_CONFIG_DIR` now relocates both the registry and the default skills dir.
+    Previously the skills dir was hardcoded to `~/.claude/skills`, so with it set, skills were
+    installed where Claude Code never looked.

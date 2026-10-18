@@ -77,9 +77,12 @@ it — **not** `autoUpdate: false`, which stops updates entirely and is a differ
 
 ## The registry
 
-`skills.json` lives in the user's config directory (`~/.config/claude-code-skill-manager/` on
-macOS and Linux, `%APPDATA%\claude-code-skill-manager\` on Windows) — deliberately **outside** the
-plugin, which is replaced wholesale whenever the plugin updates.
+`skills.json` lives at `~/.claude/skill-manager/skills.json` (under `$CLAUDE_CONFIG_DIR` if set),
+beside the skills it lists — deliberately **outside** the plugin, which is replaced wholesale
+whenever the plugin updates. Older versions kept it in `~/.config/claude-code-skill-manager/`
+(`%APPDATA%\…` on Windows); the engine moves a registry found there automatically. If a user
+restored `~/.claude` on a new machine and the registry is missing, `/skill-manager:discover`
+rebuilds it from the folders already installed.
 
 ```json
 {

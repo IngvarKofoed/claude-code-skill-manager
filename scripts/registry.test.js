@@ -218,3 +218,53 @@ test('writeRegistryFile round-trips and preserves unknown keys', () => {
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('migrateLegacyRegistry moves the old registry and tidies its empty dir', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skm-test-'));
+  const legacy = path.join(dir, 'config', 'claude-code-skill-manager', 'skills.json');
+  const target = path.join(dir, 'claude', 'skill-manager', 'skills.json');
+
+  // Runs on every command, so the nothing-to-move path must not create the new dir.
+  assert.equal(R.migrateLegacyRegistry(legacy, target), false);
+  assert.equal(fs.existsSync(path.dirname(target)), false, 'no-op creates nothing');
+
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, '{"_comment":"keep me","skills":[]}');
+
+  assert.equal(R.migrateLegacyRegistry(legacy, target), true);
+  assert.equal(R.readRegistryFile(target)._comment, 'keep me', 'contents move verbatim');
+  assert.equal(fs.existsSync(path.dirname(legacy)), false, 'emptied legacy dir is removed');
+  assert.equal(R.migrateLegacyRegistry(legacy, target), false, 'second run is a no-op');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('migrateLegacyRegistry never overwrites an existing registry', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skm-test-'));
+  const legacy = path.join(dir, 'old', 'skills.json');
+  const target = path.join(dir, 'new', 'skills.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, '{"skills":[{"repo":"old"}]}');
+  R.writeRegistryFile(target, { skills: [{ repo: 'new' }] });
+
+  // Once the new file exists the user's edits live there; the old one is stale.
+  assert.equal(R.migrateLegacyRegistry(legacy, target), false);
+  assert.equal(R.readRegistryFile(target).skills[0].repo, 'new');
+  assert.equal(fs.existsSync(legacy), true, 'old file is left alone, not deleted');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('migrateLegacyRegistry keeps a legacy dir that still holds other files', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skm-test-'));
+  const legacy = path.join(dir, 'old', 'skills.json');
+  const target = path.join(dir, 'new', 'skills.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, '{"skills":[]}');
+  fs.writeFileSync(path.join(dir, 'old', 'notes.txt'), 'mine');
+
+  assert.equal(R.migrateLegacyRegistry(legacy, target), true);
+  assert.equal(fs.existsSync(path.join(dir, 'old', 'notes.txt')), true);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});

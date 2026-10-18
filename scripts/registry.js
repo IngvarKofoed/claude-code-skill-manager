@@ -220,6 +220,46 @@ function writeRegistryFile(file, data) {
   fs.renameSync(tmp, file); // atomic within one filesystem
 }
 
+/**
+ * Move a registry from its old home to the new one, once. Returns true if it moved.
+ *
+ * An existing target always wins and the old file is left alone, never merged:
+ * once the target exists, the user's edits go there. Two sessions starting
+ * together race harmlessly -- the rename is atomic and the loser sees ENOENT.
+ * Across volumes the copy is staged beside the target, so the target still
+ * appears in one rename and a reader never sees it half-written.
+ */
+function migrateLegacyRegistry(legacy, target) {
+  if (fs.existsSync(target) || !fs.existsSync(legacy)) return false;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  try {
+    fs.renameSync(legacy, target);
+  } catch (e) {
+    if (e.code === 'ENOENT') return false; // a concurrent session moved it first
+    if (e.code !== 'EXDEV') throw e;
+    const tmp = `${target}.tmp-${process.pid}`;
+    try {
+      fs.copyFileSync(legacy, tmp);
+      fs.renameSync(tmp, target);
+    } catch (err) {
+      fs.rmSync(tmp, { force: true });
+      if (err.code === 'ENOENT') return false; // same race, on the copy path
+      throw err;
+    }
+    try {
+      fs.unlinkSync(legacy);
+    } catch {
+      /* the target is authoritative now; a leftover copy is only clutter */
+    }
+  }
+  try {
+    fs.rmdirSync(path.dirname(legacy)); // only succeeds if it is now empty
+  } catch {
+    /* other files remain, or it is already gone */
+  }
+  return true;
+}
+
 /** An empty registry, used when `add` has to create the file from nothing. */
 function emptyRegistry() {
   return { skills: [] };
@@ -272,6 +312,7 @@ module.exports = {
   resolveSettings,
   validateAndNormalize,
   writeRegistryFile,
+  migrateLegacyRegistry,
   emptyRegistry,
   computeDrift,
   pruneUpdates,

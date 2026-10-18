@@ -11,15 +11,16 @@ which alternatives were retained.
 commands/*.md                    one per verb -> /skill-manager:<verb>
                                  (sync, list, status, discover, add, remove)
 hooks/hooks.json                 one SessionStart entry (line + detached update)
-scripts/paths.js                 XDG config/state resolution
+scripts/paths.js                 registry / skills / XDG state resolution
 scripts/registry.js              pure helpers + registry read/validate/write
 scripts/sync.js                  git plumbing, install modes, commands, CLI
-scripts/registry.test.js         node --test
+scripts/*.test.js                node --test
 skills/skill-manager/SKILL.md    natural-language triggering
 ```
 
-The plugin name (`skill-manager`) is the slash-command namespace. The marketplace and the XDG
-application name both use the full repo name (`claude-code-skill-manager`).
+The plugin name (`skill-manager`) is the slash-command namespace, and names the registry's folder
+under `~/.claude`. The marketplace and the XDG state-dir name both use the full repo name
+(`claude-code-skill-manager`).
 
 The repo is its own marketplace, so it can be installed from a working copy during development:
 
@@ -30,14 +31,14 @@ The repo is its own marketplace, so it can be installed from a working copy duri
 
 ## File locations
 
-Resolved by `scripts/paths.js`, mirroring the convention used by `claude-code-notifier` and
-`claude-code-cockpit`.
+Resolved by `scripts/paths.js`. `<claude>` is `$CLAUDE_CONFIG_DIR`, else `~/.claude`
+(`%USERPROFILE%\.claude` on Windows) — Claude Code's own config dir.
 
 | what | macOS / Linux | Windows |
 |---|---|---|
-| registry | `$XDG_CONFIG_HOME/claude-code-skill-manager/skills.json` → `~/.config/…` | `%APPDATA%\claude-code-skill-manager\skills.json` |
+| registry | `<claude>/skill-manager/skills.json` | same |
 | stamp / lock / log | `$XDG_STATE_HOME/claude-code-skill-manager/` → `~/.local/state/…` | `%LOCALAPPDATA%\claude-code-skill-manager\` |
-| skills dir | `$CLAUDE_SKILLS_DIR`, else `~/.claude/skills` | same |
+| skills dir | `$CLAUDE_SKILLS_DIR`, else `<claude>/skills` | same |
 
 State files: `last-check` (mtime is the throttle stamp), `last-report` (mtime is the cutoff for
 what has already been announced), `skill-manager.lock` (holds the owning pid),
@@ -49,12 +50,30 @@ Records are pruned to the current registry on every write, so removing a skill c
 itself. It is derived state — deleting it costs a dash in `status`, nothing more, which is why every
 write is best-effort and a failure never turns a successful update into a reported one.
 
-Override order — registry: `--registry` → config path. Skills dir: `--skills-dir` →
-`$CLAUDE_SKILLS_DIR` → default.
+Override order — registry: `--registry` → `<claude>/skill-manager/skills.json`. Skills dir:
+`--skills-dir` → `$CLAUDE_SKILLS_DIR` → `<claude>/skills`.
 
-**The registry must live outside the plugin.** A marketplace-installed plugin lives in a
-version-pinned cache directory that Claude Code replaces on update; a registry shipped inside the
-payload would be destroyed every time the plugin upgraded.
+**The registry lives beside the skills, outside the plugin.** Three placements were rejected:
+
+- *Inside the plugin.* A marketplace-installed plugin lives in a version-pinned cache directory that
+  Claude Code replaces on update; a registry shipped there would be destroyed on every upgrade.
+- *`${CLAUDE_PLUGIN_DATA}`* (`~/.claude/plugins/data/<id>/`). Survives updates, but is keyed by
+  install source — one machine had both `skill-manager-claude-code-skill-manager` and
+  `skill-manager-inline` — and Claude Code deletes it on uninstall.
+- *The XDG config dir* (`~/.config/…`, `%APPDATA%\…`), where it lived up to 0.3.0. Conventional, but
+  it separated the list from the clones it describes: a restored `~/.claude` backup brought the
+  skills back and silently left the registry behind.
+
+State stays XDG and machine-local on purpose. A lock pid, a throttle stamp and an "already
+announced" marker belong to one machine; restored onto another they would be wrong.
+
+**Migration from the old location.** Unless `--registry` is given, every command first moves a
+registry found at the old XDG path to the new one — so whatever runs first after an upgrade, usually
+the `SessionStart` hook, does it. A same-volume move is one `rename`; across volumes the copy is
+staged beside the target and renamed in. An existing new file always wins and the old one is left
+untouched, never merged. If the move fails, the old file is read in place and a warning is logged:
+the registry must never look missing because it couldn't be moved. `--dry-run` reports the move
+without making it. Hooks log the move to the log file, since their stdout is a protocol.
 
 ## The registry
 
@@ -303,7 +322,8 @@ npm test      # node --test scripts/*.test.js
 
 Covers the pure helpers: subdir normalization and traversal rejection, URL parsing and
 normalization, mode/dir resolution, the full `validateDirName` rule set, slug stability, SHA
-detection, settings layering, drift computation, and registry read/write round-tripping.
+detection, settings layering, drift computation, registry read/write round-tripping, the legacy
+registry migration, and where the registry and skills dir resolve under `$CLAUDE_CONFIG_DIR`.
 
 The git-touching paths are not unit-tested; they are verified by running `sync`, `add`, and `remove`
 against real repositories.

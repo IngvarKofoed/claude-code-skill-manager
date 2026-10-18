@@ -1383,6 +1383,34 @@ function parseArgs(argv) {
   return out;
 }
 
+/**
+ * The default registry path, first moving a registry left in the old XDG
+ * config dir (up to 0.3.0) beside the skills.
+ *
+ * Every command does this, hooks included, so whatever runs first after an
+ * upgrade moves the file. If the move fails, the old file is read where it is:
+ * a registry must never look missing just because it could not be moved.
+ * Hooks report the move to the log only, since their stdout is a protocol.
+ */
+function defaultRegistryFile(dryRun, isHook) {
+  const target = P.registryPath();
+  const legacy = P.legacyRegistryPath();
+  const useLegacy = () => !fs.existsSync(target) && fs.existsSync(legacy);
+  const report = (tag, msg) => (isHook ? appendLog([`[${tag}] ${msg}`]) : log(tag, msg));
+  try {
+    if (dryRun) {
+      if (!useLegacy()) return target;
+      report('skip', `(dry-run) would move registry ${legacy} -> ${target}`);
+      return legacy;
+    }
+    if (R.migrateLegacyRegistry(legacy, target)) report('ok', `moved registry ${legacy} -> ${target}`);
+  } catch (err) {
+    report('warn', `could not move registry ${legacy} -> ${target}: ${err.message}`);
+    if (useLegacy()) return legacy;
+  }
+  return target;
+}
+
 function main(argv) {
   let args;
   try {
@@ -1407,7 +1435,7 @@ function main(argv) {
 
   const registryFile = args.registry
     ? path.resolve(P.expandHome(args.registry))
-    : P.registryPath();
+    : defaultRegistryFile(args.dryRun, isHook);
   const skillsDir = args.skillsDir ? path.resolve(P.expandHome(args.skillsDir)) : P.skillsDir();
 
   const ctx = {
