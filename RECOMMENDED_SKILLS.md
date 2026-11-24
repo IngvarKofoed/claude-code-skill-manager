@@ -23,6 +23,7 @@ Paste this one prompt:
 Install these skills with skill-manager, one at a time:
 
 - https://github.com/IngvarKofoed/claude-code-spec.git      as dir "spec"
+- https://github.com/IngvarKofoed/claude-code-spec-format.git as dir "spec-format"
 - https://github.com/IngvarKofoed/claude-code-scaffold.git  as dir "scaffold"
 - https://github.com/IngvarKofoed/claude-code-fix-code.git  as dir "fix-code"
 - https://github.com/IngvarKofoed/claude-code-git.git       as dir "git"
@@ -56,8 +57,13 @@ the codebase freely but the only file it may write is the spec markdown. Offers 
 approaches to choose between, drafts to `docs/specs/YYYY-MM-DD-<slug>.md`, asks you to mark it up
 with inline `////` comments, integrates them, and closes with an implementation strategy.
 
+It needs **spec-format** too: plain files (no `SKILL.md`, so it never shows up as a skill) holding
+what a spec contains and the fresh-eyes review's brief. `/spec` stops and prints this line if it's
+missing.
+
 ```
 /skill-manager:add https://github.com/IngvarKofoed/claude-code-spec.git --dir spec
+/skill-manager:add https://github.com/IngvarKofoed/claude-code-spec-format.git --dir spec-format
 ```
 
 Use it with: `/spec add rate limiting to the ingest endpoint`
@@ -127,6 +133,7 @@ folder Claude actually loads it from, so you can edit, commit and push from righ
 
 ```
 /skill-manager:add git@github.com:IngvarKofoed/claude-code-spec.git     --dir spec
+/skill-manager:add git@github.com:IngvarKofoed/claude-code-spec-format.git --dir spec-format
 /skill-manager:add git@github.com:IngvarKofoed/claude-code-scaffold.git --dir scaffold
 /skill-manager:add git@github.com:IngvarKofoed/claude-code-fix-code.git --dir fix-code
 /skill-manager:add git@github.com:IngvarKofoed/claude-code-git.git      --dir git
@@ -179,6 +186,7 @@ it and git names the folder after the repo, and the skill won't load:
 
 ```bash
 git clone https://github.com/IngvarKofoed/claude-code-spec     ~/.claude/skills/spec
+git clone https://github.com/IngvarKofoed/claude-code-spec-format ~/.claude/skills/spec-format
 git clone https://github.com/IngvarKofoed/claude-code-scaffold ~/.claude/skills/scaffold
 git clone https://github.com/IngvarKofoed/claude-code-fix-code ~/.claude/skills/fix-code
 git clone https://github.com/IngvarKofoed/claude-code-git      ~/.claude/skills/git
